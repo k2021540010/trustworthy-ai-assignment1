@@ -5,6 +5,11 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
 
 def get_device():
     if torch.backends.mps.is_available():
@@ -263,3 +268,286 @@ if __name__ == "__main__":
     cifar_test_loss, cifar_test_acc = evaluate(cifar_model, cifar_test_loader, nn.CrossEntropyLoss())
     status = "재학습 후 평가" if cifar_trained else "로드 및 평가" if cifar_loaded else "학습 후 평가"
     print(f"CIFAR-10 모델 {status} 완료 -> Test Loss: {cifar_test_loss:.4f} | Test Acc: {cifar_test_acc:.2f}%")
+
+def fgsm_targeted(model, x, target, eps):
+    model.eval()
+
+    x_adv = x.clone().detach().requires_grad_(True)
+
+    output = model(x_adv)
+
+    target_tensor = torch.tensor([target], device=DEVICE) if x_adv.dim() == 3 else \
+                    torch.full((x_adv.size(0),), target, device=DEVICE)
+    loss = nn.CrossEntropyLoss()(output, target_tensor)
+
+    model.zero_grad()
+    loss.backward()
+
+    x_adv = x_adv - eps * x_adv.grad.sign()
+
+    x_adv = x_adv.detach().clamp(0, 1)
+
+    return x_adv
+
+def fgsm_untargeted(model, x, label, eps):
+    model.eval()
+
+    x_adv = x.clone().detach().requires_grad_(True)
+
+    output = model(x_adv)
+
+    label_tensor = torch.tensor([label], device=DEVICE) if x_adv.dim() == 3 else \
+                   torch.full((x_adv.size(0),), label, device=DEVICE)
+    loss = nn.CrossEntropyLoss()(output, label_tensor)
+
+    model.zero_grad()
+    loss.backward()
+
+    x_adv = x_adv + eps * x_adv.grad.sign()
+
+    x_adv = x_adv.detach().clamp(0, 1)
+
+    return x_adv
+
+def pgd_targeted(model, x, target, k, eps, eps_step):
+    model.eval()
+
+    x_adv = x.clone().detach()
+
+    target_tensor = torch.tensor([target], device=DEVICE) if x.dim() == 3 else \
+                    torch.full((x.size(0),), target, device=DEVICE)
+
+    for i in range(k):
+        x_adv = x_adv.requires_grad_(True)
+
+        output = model(x_adv)
+
+        loss = nn.CrossEntropyLoss()(output, target_tensor)
+
+        model.zero_grad()
+        loss.backward()
+
+        x_adv = x_adv - eps_step * x_adv.grad.sign()
+
+        x_adv = torch.max(torch.min(x_adv, x + eps), x - eps)
+
+        x_adv = x_adv.detach().clamp(0, 1)
+
+    return x_adv
+
+
+def pgd_untargeted(model, x, label, k, eps, eps_step):
+    model.eval()
+
+    x_adv = x.clone().detach()
+
+    label_tensor = torch.tensor([label], device=DEVICE) if x.dim() == 3 else \
+                   torch.full((x.size(0),), label, device=DEVICE)
+
+    for i in range(k):
+        x_adv = x_adv.requires_grad_(True)
+
+        output = model(x_adv)
+
+        loss = nn.CrossEntropyLoss()(output, label_tensor)
+
+        model.zero_grad()
+        loss.backward()
+
+        x_adv = x_adv + eps_step * x_adv.grad.sign()
+
+        x_adv = torch.max(torch.min(x_adv, x + eps), x - eps)
+
+        x_adv = x_adv.detach().clamp(0, 1)
+
+    return x_adv
+
+os.makedirs('results', exist_ok=True)
+
+CIFAR10_CLASSES = ['airplane', 'automobile', 'bird', 'cat', 'deer',
+                   'dog', 'frog', 'horse', 'ship', 'truck']
+
+def evaluate_attack(model, test_loader, attack_fn, attack_kwargs,
+                    attack_type, n_samples=100, dataset_name="MNIST"):
+    model.eval()
+    success = 0
+    total = 0
+
+    for images, labels in test_loader:
+        for i in range(images.size(0)):
+            if total >= n_samples:
+                break
+
+            x = images[i].unsqueeze(0).to(DEVICE)  
+            label = labels[i].item()
+
+            if attack_type == 'targeted':
+                target = (label + 1) % 10
+                x_adv = attack_fn(model, x, target, **attack_kwargs)
+                pred = model(x_adv).argmax(dim=1).item()
+                if pred == target:
+                    success += 1
+            else:
+                x_adv = attack_fn(model, x, label, **attack_kwargs)
+                pred = model(x_adv).argmax(dim=1).item()
+                if pred != label:
+                    success += 1
+
+            total += 1
+
+        if total >= n_samples:
+            break
+
+    success_rate = 100. * success / total
+    print(f"[{dataset_name}] {attack_fn.__name__} (eps={attack_kwargs.get('eps')}) "
+          f"공격 성공률: {success_rate:.2f}% ({success}/{total})")
+    return success_rate
+
+def visualize_attack(model, test_loader, attack_fn, attack_kwargs,
+                     attack_type, n_viz=5, dataset_name="MNIST", save_name="attack"):
+    model.eval()
+    samples = []  
+
+    is_cifar = (dataset_name == "CIFAR-10")
+
+    for images, labels in test_loader:
+        for i in range(images.size(0)):
+            if len(samples) >= n_viz:
+                break
+
+            x = images[i].unsqueeze(0).to(DEVICE)
+            label = labels[i].item()
+
+            if attack_type == 'targeted':
+                target = (label + 1) % 10
+                x_adv = attack_fn(model, x, target, **attack_kwargs)
+            else:
+                x_adv = attack_fn(model, x, label, **attack_kwargs)
+
+            orig_pred = model(x).argmax(dim=1).item()
+            adv_pred  = model(x_adv).argmax(dim=1).item()
+
+            if attack_type == 'targeted' and adv_pred != (label + 1) % 10:
+                continue
+            if attack_type == 'untargeted' and adv_pred == label:
+                continue
+
+            samples.append((
+                x.cpu().squeeze(0),
+                x_adv.cpu().squeeze(0),
+                label, orig_pred, adv_pred
+            ))
+
+        if len(samples) >= n_viz:
+            break
+
+    if len(samples) == 0:
+        print(f"[{dataset_name}] {save_name}: 공격 성공 샘플 없음, 시각화 건너뜀")
+        return
+
+    fig, axes = plt.subplots(len(samples), 3, figsize=(10, 3 * len(samples)))
+    fig.suptitle(f"{dataset_name} - {attack_fn.__name__} (eps={attack_kwargs.get('eps')})",
+                 fontsize=14, fontweight='bold')
+
+    col_titles = ['Original', 'Adversarial', 'Perturbation (x10)']
+    for col, title in enumerate(col_titles):
+        axes[0][col].set_title(title, fontsize=12)
+
+    for row, (x_orig, x_adv, true_label, orig_pred, adv_pred) in enumerate(samples):
+        perturbation = (x_adv - x_orig) * 10 
+
+        if is_cifar:
+            mean = torch.tensor([0.4914, 0.4822, 0.4465]).view(3, 1, 1)
+            std  = torch.tensor([0.2470, 0.2435, 0.2616]).view(3, 1, 1)
+            x_orig_show = (x_orig * std + mean).clamp(0, 1).permute(1, 2, 0).numpy()
+            x_adv_show  = (x_adv  * std + mean).clamp(0, 1).permute(1, 2, 0).numpy()
+            pert_show   = (perturbation * std + mean).clamp(0, 1).permute(1, 2, 0).numpy()
+            cmap = None
+            orig_label_str = CIFAR10_CLASSES[true_label]
+            orig_pred_str  = CIFAR10_CLASSES[orig_pred]
+            adv_pred_str   = CIFAR10_CLASSES[adv_pred]
+        else:
+            mean = torch.tensor([0.1307]).view(1, 1, 1)
+            std  = torch.tensor([0.3081]).view(1, 1, 1)
+            x_orig_show = (x_orig * std + mean).clamp(0, 1).squeeze().numpy()
+            x_adv_show  = (x_adv  * std + mean).clamp(0, 1).squeeze().numpy()
+            pert_show   = perturbation.squeeze().numpy()
+            cmap = 'gray'
+            orig_label_str = str(true_label)
+            orig_pred_str  = str(orig_pred)
+            adv_pred_str   = str(adv_pred)
+
+        axes[row][0].imshow(x_orig_show, cmap=cmap)
+        axes[row][0].set_xlabel(f"True: {orig_label_str}\nPred: {orig_pred_str}", fontsize=9)
+
+        axes[row][1].imshow(x_adv_show, cmap=cmap)
+        axes[row][1].set_xlabel(f"Pred: {adv_pred_str}", fontsize=9, color='red')
+
+        axes[row][2].imshow(pert_show, cmap=cmap)
+        axes[row][2].set_xlabel("Perturbation x10", fontsize=9)
+
+        for col in range(3):
+            axes[row][col].set_xticks([])
+            axes[row][col].set_yticks([])
+
+    plt.tight_layout()
+    save_path = f"results/{save_name}.png"
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"시각화 저장 완료: {save_path}")
+
+def run_all_attacks(mnist_model, cifar_model,
+                    mnist_test_loader, cifar_test_loader):
+
+    print("\n" + "="*60)
+    print("  공격 실행 시작")
+    print("="*60)
+
+    mnist_eps  = 0.3
+    cifar_eps  = 0.03  
+    pgd_k      = 40
+    pgd_step   = 0.01
+
+    attacks = [
+        (fgsm_targeted,   'targeted',   {'eps': mnist_eps},
+         'MNIST',   mnist_model, mnist_test_loader, 'mnist_fgsm_targeted'),
+        (fgsm_untargeted, 'untargeted', {'eps': mnist_eps},
+         'MNIST',   mnist_model, mnist_test_loader, 'mnist_fgsm_untargeted'),
+        (pgd_targeted,    'targeted',   {'eps': mnist_eps, 'k': pgd_k, 'eps_step': pgd_step},
+         'MNIST',   mnist_model, mnist_test_loader, 'mnist_pgd_targeted'),
+        (pgd_untargeted,  'untargeted', {'eps': mnist_eps, 'k': pgd_k, 'eps_step': pgd_step},
+         'MNIST',   mnist_model, mnist_test_loader, 'mnist_pgd_untargeted'),
+
+        (fgsm_targeted,   'targeted',   {'eps': cifar_eps},
+         'CIFAR-10', cifar_model, cifar_test_loader, 'cifar_fgsm_targeted'),
+        (fgsm_untargeted, 'untargeted', {'eps': cifar_eps},
+         'CIFAR-10', cifar_model, cifar_test_loader, 'cifar_fgsm_untargeted'),
+        (pgd_targeted,    'targeted',   {'eps': cifar_eps, 'k': pgd_k, 'eps_step': pgd_step/10},
+         'CIFAR-10', cifar_model, cifar_test_loader, 'cifar_pgd_targeted'),
+        (pgd_untargeted,  'untargeted', {'eps': cifar_eps, 'k': pgd_k, 'eps_step': pgd_step/10},
+         'CIFAR-10', cifar_model, cifar_test_loader, 'cifar_pgd_untargeted'),
+    ]
+
+    results = {}
+    for (attack_fn, attack_type, kwargs, dataset_name,
+         model, loader, save_name) in attacks:
+
+        rate = evaluate_attack(
+            model, loader, attack_fn, kwargs,
+            attack_type, n_samples=100, dataset_name=dataset_name
+        )
+        results[save_name] = rate
+
+        visualize_attack(
+            model, loader, attack_fn, kwargs,
+            attack_type, n_viz=5,
+            dataset_name=dataset_name, save_name=save_name
+        )
+
+    print("\n" + "="*60)
+    print("  공격 성공률 요약")
+    print("="*60)
+    for name, rate in results.items():
+        print(f"  {name:35s}: {rate:.2f}%")
+
+    return results
