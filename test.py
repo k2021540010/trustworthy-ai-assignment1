@@ -82,7 +82,10 @@ class CifarCNN(nn.Module):
             nn.Linear(256 * 4 * 4, 512),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
-            nn.Linear(512, 10),
+            nn.Linear(512, 64),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(64, 10)
         )
 
     def forward(self, x):
@@ -92,8 +95,7 @@ class CifarCNN(nn.Module):
 
 def get_mnist_loaders(batch_size=128):
     transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,)) 
+        transforms.ToTensor()
     ])
     train_set = torchvision.datasets.MNIST(root='./data', train=True,  download=True, transform=transform)
     test_set  = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
@@ -105,14 +107,10 @@ def get_cifar_loaders(batch_size=128):
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),           
         transforms.RandomCrop(32, padding=4),        
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2470, 0.2435, 0.2616)) 
+        transforms.ToTensor()
     ])
     test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2470, 0.2435, 0.2616))
+        transforms.ToTensor()
     ])
     train_set = torchvision.datasets.CIFAR10(root='./data', train=True,  download=True, transform=train_transform)
     test_set  = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=test_transform)
@@ -193,81 +191,6 @@ def evaluate_model_from_checkpoint(model, model_path, test_loader, name):
         print(f"{name} 평가 결과 -> Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}%")
         return model, True
     return model, False
-
-if __name__ == "__main__":
-
-    print("\n[1] MNIST 데이터 로드 중...")
-    mnist_train_loader, mnist_test_loader = get_mnist_loaders(batch_size=128)
-
-    mnist_model = MnistCNN()
-    mnist_loaded = False
-    if os.path.exists("mnist_model.pth"):
-        mnist_model.load_state_dict(torch.load("mnist_model.pth", map_location=DEVICE))
-        mnist_model = mnist_model.to(DEVICE)
-        print("MNIST 모델 로드 완료: mnist_model.pth")
-        mnist_loaded = True
-    else:
-        mnist_model = train_model(
-            mnist_model,
-            mnist_train_loader,
-            mnist_test_loader,
-            epochs=10,
-            lr=0.001,
-            name="MNIST CNN"
-        )
-        torch.save(mnist_model.state_dict(), "mnist_model.pth")
-        print("MNIST 모델 저장 완료: mnist_model.pth")
-
-    mnist_test_loss, mnist_test_acc = evaluate(mnist_model, mnist_test_loader, nn.CrossEntropyLoss())
-    print(f"MNIST 모델 {'로드 및 평가' if mnist_loaded else '학습 후 평가'} 완료 -> Test Loss: {mnist_test_loss:.4f} | Test Acc: {mnist_test_acc:.2f}%")
-
-    print("\n[2] CIFAR-10 데이터 로드 중...")
-    cifar_train_loader, cifar_test_loader = get_cifar_loaders(batch_size=128)
-
-    cifar_model = CifarCNN()
-    cifar_loaded = False
-    cifar_trained = False
-
-    if os.path.exists("cifar_model.pth"):
-        cifar_model.load_state_dict(torch.load("cifar_model.pth", map_location=DEVICE))
-        cifar_model = cifar_model.to(DEVICE)
-        print("CIFAR-10 모델 로드 완료: cifar_model.pth")
-        cifar_loaded = True
-        cifar_test_loss, cifar_test_acc = evaluate(cifar_model, cifar_test_loader, nn.CrossEntropyLoss())
-        print(f"로드된 CIFAR-10 정확도: {cifar_test_acc:.2f}%")
-
-        if cifar_test_acc < 80.0:
-            print("CIFAR-10 정확도 <80%이므로 모델을 재학습합니다.")
-            cifar_loaded = False
-            cifar_model = train_model(
-                cifar_model,
-                cifar_train_loader,
-                cifar_test_loader,
-                epochs=30,
-                lr=0.1,
-                name="CIFAR-10 CNN",
-                optimizer_type='sgd'
-            )
-            cifar_trained = True
-            torch.save(cifar_model.state_dict(), "cifar_model.pth")
-            print("CIFAR-10 모델 저장 완료: cifar_model.pth")
-    else:
-        cifar_model = train_model(
-            cifar_model,
-            cifar_train_loader,
-            cifar_test_loader,
-            epochs=30,
-            lr=0.1,
-            name="CIFAR-10 CNN",
-            optimizer_type='sgd'
-        )
-        cifar_trained = True
-        torch.save(cifar_model.state_dict(), "cifar_model.pth")
-        print("CIFAR-10 모델 저장 완료: cifar_model.pth")
-
-    cifar_test_loss, cifar_test_acc = evaluate(cifar_model, cifar_test_loader, nn.CrossEntropyLoss())
-    status = "재학습 후 평가" if cifar_trained else "로드 및 평가" if cifar_loaded else "학습 후 평가"
-    print(f"CIFAR-10 모델 {status} 완료 -> Test Loss: {cifar_test_loss:.4f} | Test Acc: {cifar_test_acc:.2f}%")
 
 def fgsm_targeted(model, x, target, eps):
     model.eval()
@@ -427,9 +350,7 @@ def visualize_attack(model, test_loader, attack_fn, attack_kwargs,
             orig_pred = model(x).argmax(dim=1).item()
             adv_pred  = model(x_adv).argmax(dim=1).item()
 
-            if attack_type == 'targeted' and adv_pred != (label + 1) % 10:
-                continue
-            if attack_type == 'untargeted' and adv_pred == label:
+            if orig_pred != label: 
                 continue
 
             samples.append((
@@ -457,20 +378,16 @@ def visualize_attack(model, test_loader, attack_fn, attack_kwargs,
         perturbation = (x_adv - x_orig) * 10 
 
         if is_cifar:
-            mean = torch.tensor([0.4914, 0.4822, 0.4465]).view(3, 1, 1)
-            std  = torch.tensor([0.2470, 0.2435, 0.2616]).view(3, 1, 1)
-            x_orig_show = (x_orig * std + mean).clamp(0, 1).permute(1, 2, 0).numpy()
-            x_adv_show  = (x_adv  * std + mean).clamp(0, 1).permute(1, 2, 0).numpy()
-            pert_show   = (perturbation * std + mean).clamp(0, 1).permute(1, 2, 0).numpy()
+            x_orig_show = x_orig.clamp(0, 1).permute(1, 2, 0).numpy()
+            x_adv_show  = x_adv.clamp(0, 1).permute(1, 2, 0).numpy()
+            pert_show   = perturbation.clamp(0, 1).permute(1, 2, 0).numpy()
             cmap = None
             orig_label_str = CIFAR10_CLASSES[true_label]
             orig_pred_str  = CIFAR10_CLASSES[orig_pred]
             adv_pred_str   = CIFAR10_CLASSES[adv_pred]
         else:
-            mean = torch.tensor([0.1307]).view(1, 1, 1)
-            std  = torch.tensor([0.3081]).view(1, 1, 1)
-            x_orig_show = (x_orig * std + mean).clamp(0, 1).squeeze().numpy()
-            x_adv_show  = (x_adv  * std + mean).clamp(0, 1).squeeze().numpy()
+            x_orig_show = x_orig.clamp(0, 1).squeeze().numpy()
+            x_adv_show  = x_adv.clamp(0, 1).squeeze().numpy()
             pert_show   = perturbation.squeeze().numpy()
             cmap = 'gray'
             orig_label_str = str(true_label)
@@ -551,3 +468,190 @@ def run_all_attacks(mnist_model, cifar_model,
         print(f"  {name:35s}: {rate:.2f}%")
 
     return results
+
+def run_eps_analysis(mnist_model, cifar_model,
+                     mnist_test_loader, cifar_test_loader):
+
+    print("\n" + "="*60)
+    print("  eps별 공격 성공률 분석")
+    print("="*60)
+
+    eps_list = [0.05, 0.1, 0.2, 0.3]
+    pgd_k    = 40
+
+    analysis = {
+        'MNIST_fgsm_targeted':   {},
+        'MNIST_fgsm_untargeted': {},
+        'MNIST_pgd_targeted':    {},
+        'MNIST_pgd_untargeted':  {},
+        'CIFAR_fgsm_targeted':   {},
+        'CIFAR_fgsm_untargeted': {},
+        'CIFAR_pgd_targeted':    {},
+        'CIFAR_pgd_untargeted':  {},
+    }
+
+    for eps in eps_list:
+        print(f"\n--- eps = {eps} ---")
+        eps_str = str(eps).replace('.', '')
+
+        analysis['MNIST_fgsm_targeted'][eps] = evaluate_attack(
+            mnist_model, mnist_test_loader, fgsm_targeted,
+            {'eps': eps}, 'targeted', n_samples=100, dataset_name="MNIST")
+        visualize_attack(
+            mnist_model, mnist_test_loader, fgsm_targeted, {'eps': eps},
+            'targeted', n_viz=5, dataset_name="MNIST",
+            save_name=f"mnist_fgsm_targeted_eps{eps_str}")
+
+        analysis['MNIST_fgsm_untargeted'][eps] = evaluate_attack(
+            mnist_model, mnist_test_loader, fgsm_untargeted,
+            {'eps': eps}, 'untargeted', n_samples=100, dataset_name="MNIST")
+        visualize_attack(
+            mnist_model, mnist_test_loader, fgsm_untargeted, {'eps': eps},
+            'untargeted', n_viz=5, dataset_name="MNIST",
+            save_name=f"mnist_fgsm_untargeted_eps{eps_str}")
+
+        analysis['MNIST_pgd_targeted'][eps] = evaluate_attack(
+            mnist_model, mnist_test_loader, pgd_targeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'targeted', n_samples=100, dataset_name="MNIST")
+        visualize_attack(
+            mnist_model, mnist_test_loader, pgd_targeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'targeted', n_viz=5, dataset_name="MNIST",
+            save_name=f"mnist_pgd_targeted_eps{eps_str}")
+
+        analysis['MNIST_pgd_untargeted'][eps] = evaluate_attack(
+            mnist_model, mnist_test_loader, pgd_untargeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'untargeted', n_samples=100, dataset_name="MNIST")
+        visualize_attack(
+            mnist_model, mnist_test_loader, pgd_untargeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'untargeted', n_viz=5, dataset_name="MNIST",
+            save_name=f"mnist_pgd_untargeted_eps{eps_str}")
+
+        analysis['CIFAR_fgsm_targeted'][eps] = evaluate_attack(
+            cifar_model, cifar_test_loader, fgsm_targeted,
+            {'eps': eps}, 'targeted', n_samples=100, dataset_name="CIFAR-10")
+        visualize_attack(
+            cifar_model, cifar_test_loader, fgsm_targeted, {'eps': eps},
+            'targeted', n_viz=5, dataset_name="CIFAR-10",
+            save_name=f"cifar_fgsm_targeted_eps{eps_str}")
+
+        analysis['CIFAR_fgsm_untargeted'][eps] = evaluate_attack(
+            cifar_model, cifar_test_loader, fgsm_untargeted,
+            {'eps': eps}, 'untargeted', n_samples=100, dataset_name="CIFAR-10")
+        visualize_attack(
+            cifar_model, cifar_test_loader, fgsm_untargeted, {'eps': eps},
+            'untargeted', n_viz=5, dataset_name="CIFAR-10",
+            save_name=f"cifar_fgsm_untargeted_eps{eps_str}")
+
+        analysis['CIFAR_pgd_targeted'][eps] = evaluate_attack(
+            cifar_model, cifar_test_loader, pgd_targeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'targeted', n_samples=100, dataset_name="CIFAR-10")
+        visualize_attack(
+            cifar_model, cifar_test_loader, pgd_targeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'targeted', n_viz=5, dataset_name="CIFAR-10",
+            save_name=f"cifar_pgd_targeted_eps{eps_str}")
+
+        analysis['CIFAR_pgd_untargeted'][eps] = evaluate_attack(
+            cifar_model, cifar_test_loader, pgd_untargeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'untargeted', n_samples=100, dataset_name="CIFAR-10")
+        visualize_attack(
+            cifar_model, cifar_test_loader, pgd_untargeted,
+            {'eps': eps, 'k': pgd_k, 'eps_step': eps/10},
+            'untargeted', n_viz=5, dataset_name="CIFAR-10",
+            save_name=f"cifar_pgd_untargeted_eps{eps_str}")
+
+    print("\n" + "="*60)
+    print("  eps별 공격 성공률 요약표")
+    print("="*60)
+    print(f"{'Attack':<25} " + " ".join(f"eps={e:<5}" for e in eps_list))
+    print("-"*60)
+    for attack_name, eps_results in analysis.items():
+        row = f"{attack_name:<25} "
+        row += " ".join(f"{eps_results[e]:>8.1f}%" for e in eps_list)
+        print(row)
+
+    return analysis
+
+if __name__ == "__main__":
+
+    print("\n[1] MNIST 데이터 로드 중...")
+    mnist_train_loader, mnist_test_loader = get_mnist_loaders(batch_size=128)
+
+    mnist_model = MnistCNN()
+    mnist_loaded = False
+    if os.path.exists("mnist_model.pth"):
+        mnist_model.load_state_dict(torch.load("mnist_model.pth", map_location=DEVICE))
+        mnist_model = mnist_model.to(DEVICE)
+        print("MNIST 모델 로드 완료: mnist_model.pth")
+        mnist_loaded = True
+    else:
+        mnist_model = train_model(
+            mnist_model,
+            mnist_train_loader,
+            mnist_test_loader,
+            epochs=10,
+            lr=0.001,
+            name="MNIST CNN"
+        )
+        torch.save(mnist_model.state_dict(), "mnist_model.pth")
+        print("MNIST 모델 저장 완료: mnist_model.pth")
+
+    mnist_test_loss, mnist_test_acc = evaluate(mnist_model, mnist_test_loader, nn.CrossEntropyLoss())
+    print(f"MNIST 모델 {'로드 및 평가' if mnist_loaded else '학습 후 평가'} 완료 -> Test Loss: {mnist_test_loss:.4f} | Test Acc: {mnist_test_acc:.2f}%")
+
+    print("\n[2] CIFAR-10 데이터 로드 중...")
+    cifar_train_loader, cifar_test_loader = get_cifar_loaders(batch_size=128)
+
+    cifar_model = CifarCNN()
+    cifar_loaded = False
+    cifar_trained = False
+
+    if os.path.exists("cifar_model.pth"):
+        cifar_model.load_state_dict(torch.load("cifar_model.pth", map_location=DEVICE))
+        cifar_model = cifar_model.to(DEVICE)
+        print("CIFAR-10 모델 로드 완료: cifar_model.pth")
+        cifar_loaded = True
+        cifar_test_loss, cifar_test_acc = evaluate(cifar_model, cifar_test_loader, nn.CrossEntropyLoss())
+        print(f"로드된 CIFAR-10 정확도: {cifar_test_acc:.2f}%")
+
+        if cifar_test_acc < 80.0:
+            print("CIFAR-10 정확도 <80%이므로 모델을 재학습합니다.")
+            cifar_loaded = False
+            cifar_model = train_model(
+                cifar_model,
+                cifar_train_loader,
+                cifar_test_loader,
+                epochs=30,
+                lr=0.1,
+                name="CIFAR-10 CNN",
+                optimizer_type='sgd'
+            )
+            cifar_trained = True
+            torch.save(cifar_model.state_dict(), "cifar_model.pth")
+            print("CIFAR-10 모델 저장 완료: cifar_model.pth")
+    else:
+        cifar_model = train_model(
+            cifar_model,
+            cifar_train_loader,
+            cifar_test_loader,
+            epochs=30,
+            lr=0.1,
+            name="CIFAR-10 CNN",
+            optimizer_type='sgd'
+        )
+        cifar_trained = True
+        torch.save(cifar_model.state_dict(), "cifar_model.pth")
+        print("CIFAR-10 모델 저장 완료: cifar_model.pth")
+
+    cifar_test_loss, cifar_test_acc = evaluate(cifar_model, cifar_test_loader, nn.CrossEntropyLoss())
+    status = "재학습 후 평가" if cifar_trained else "로드 및 평가" if cifar_loaded else "학습 후 평가"
+    print(f"CIFAR-10 모델 {status} 완료 -> Test Loss: {cifar_test_loss:.4f} | Test Acc: {cifar_test_acc:.2f}%")
+    
+    run_eps_analysis(mnist_model, cifar_model,
+                     mnist_test_loader, cifar_test_loader)
